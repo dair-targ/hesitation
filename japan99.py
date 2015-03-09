@@ -6,8 +6,7 @@ import math
 import numpy
 from matplotlib import mlab, pyplot
 from librosa import core
-from scipy import signal, optimize
-from scipy.stats import norm
+from scipy.io import wavfile
 
 REF_Hz = 440.0 * 2**(3.0 / 12.0 - 5.0)
 
@@ -41,13 +40,16 @@ def main():
     input_path = args[0]
     logging.info('Reading %s', input_path)
 
-    data, rate = core.load(input_path)
+    rate, data = wavfile.read(input_path)
     logging.info('Sample length: %.2fsec', float(len(data)) / float(rate))
 
     logging.info('Calculating specgram...')
     spectrum, frequencies, midpoints = mlab.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
     spectrum = numpy.transpose(spectrum)
     cent_frequencies = numpy.array([0.0] + map(f_cent, frequencies[1:]))
+    # pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
+    # pyplot.show()
+    # exit()
 
     logging.info('Calculating instantaneous frequencies...')
     instantaneous_frequencies, short_time_fourier_transform = core.ifgram(data, rate, n_fft=options.nfft, hop_length=options.step)
@@ -60,11 +62,14 @@ def main():
         for iF, F in enumerate(frequencies):
             pXF[ix][iF] = p(frequencies[ix], frequencies[iF])
 
+    # t_x = int(8.1 * rate * 0.01)
+
     logging.info('Estimating Fundamental Frequency...')
-    F0s = []
+    F_F0 = []
+    Pow = []
     delta = instantaneous_frequencies - frequencies
-    for t, midpoint in enumerate(midpoints[:10]):
-        logging.info('Calculating for %f', midpoint)
+    for t, midpoint in enumerate(midpoints[::100]):
+        logging.info('Calculating for %f (#%d)', midpoint, t)
         stable_frequencies = []
         Psi_p = short_time_fourier_transform[t]
         delta_t = delta[t]
@@ -80,22 +85,47 @@ def main():
             if candidate_P_F0 > best_P0:
                 best_iF = iF
                 best_P0 = candidate_P_F0
-        F0s.append(frequencies[best_iF])
+        F_F0.append(frequencies[best_iF])
+
+        W2 = 35
+        Pow.append([
+            max(abs(G(frequencies[ix], F_F0[t] + 1200.0 * math.log(k, 2.0), W2) * Psi_p[ix]) for ix in xrange(1, len(frequencies)))
+            for k in xrange(1, len(frequencies))
+        ])
+
+        # F_F0[-1]
+
+        # pyplot.plot(frequencies[1:], Pow[-1])
+    pyplot.imshow(Pow)
+    pyplot.show()
+
+    # pyplot.plot(F_F0)
+    # pyplot.show()
     # Suppose F0s are calculated correctly...
 
-    logging.info('Estimating Spectral Envelope...')
-    pyplot.axvline(f_cent(F0s[9]))
-    x = cent_frequencies
-    y = spectrum[10]
-    norm.fit_loc_scale()
-    pyplot.plot(x, y)
-    pyplot.show()
-    exit()
+    # logging.info('Estimating Spectral Envelope...')
+    # W2 = 35
+    # for t, midpoint in enumerate(midpoints[9:10]):
+    #     logging.info('Calculating for %f', midpoint)
+    #     Psi_p = short_time_fourier_transform[t]
+    #     Pow_local = lambda
+    #     Pow = lambda k: max(G(x, F_F0[t] + 1200.0 * math.log(k, 2.0), W2) * Psi_p[ix] for ix, x in stable_frequencies)
+    # pyplot.axvline(f_cent(F0s[9]))
+    # x = cent_frequencies
+    # y = spectrum[10]
+    # pyplot.plot(x, y)
+    # pyplot.plot(x, mlab.normpdf(x, *stats.norm.fit(y)))
+    # pyplot.show()
+    # exit()
 
-    logging.info('Obtaining Two Features of Filled Pauses...')
-    pyplot.plot(frequencies, short_time_fourier_transform[10])
-    pyplot.show()
-    exit()
+    # logging.info('Obtaining Two Features of Filled Pauses...')
+    # pyplot.plot(frequencies, short_time_fourier_transform[10])
+    # pyplot.show()
+    # exit()
+        R = 0.034
+        W = 0.575
+        P = math.exp(- (R * S_f + (1 - R) * S_s)**2.0 / W**2.0)
+
 
 
 
