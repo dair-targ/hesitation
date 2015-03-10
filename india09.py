@@ -31,42 +31,32 @@ def main():
     vad = numpy.array([p > limit for p in power])
 
     logging.info('Formant Computation')
-    # t = int(6.0 * rate / float(options.step))
-    # sample = data[t:t + options.step]
-    # lfiltered_data = signal.lfilter([1., 0.63], 1, sample * numpy.hamming(len(sample)))
-    # a, e, k = talkbox.lpc(lfiltered_data, order=2 + rate / 1000)
-    # roots = [r for r in numpy.roots(a) if numpy.imag(r) >= 0.0]
-    # angles = numpy.arctan2(numpy.imag(roots), numpy.real(roots))
-    # formants = sorted(angles * (rate / (2 * math.pi)))[:2]
-    # map(pyplot.axvline, formants)
-    #
-    # pyplot.plot(frequencies, numpy.log10(spectrum[t]))
+    formants = []
+    order = 2 + rate / 1000
+    for t, midpoint in enumerate(midpoints):
+        if not vad[t]:
+            formants.append([])
+            continue
+        # Frame index
+        fi = t * rate / options.step
+        sample = data[fi - options.nfft / 2:fi + options.nfft / 2 + 1]
+        x1 = sample * numpy.hamming(len(sample))
+        lfiltered_sample = signal.lfilter([1.0], [1.0, 0.63], x1)
+        if len(lfiltered_sample) < order:
+            formants.append([])
+            continue
+        a, e, k = talkbox.lpc(lfiltered_sample, order=order)
+        roots = filter(lambda v: numpy.imag(v) >= 0, numpy.roots(a))
+        angles = numpy.arctan2(numpy.imag(roots), numpy.real(roots)) * rate / (2.0 * math.pi)
+        formants.append(sorted(angles))
+    F = lambda k: [formants[t][k] if len(formants[t]) > k else 0.0 for t, _ in enumerate(midpoints)]
+    # pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
+    # for k in xrange(order):
+    #     pyplot.plot(midpoints, F(k))
     # pyplot.show()
     # exit()
-
-    F1 = []
-    F2 = []
-    delta = options.step / 2
-    order = int(2 + rate / 1000)
-    for t, midpoint in enumerate(midpoints):
-        middle = int(midpoint * rate)
-        sample = data[middle - delta:middle + delta + 1]
-        if vad[t] and len(sample) >= order:
-            lfiltered_data = signal.lfilter([1.0], [1.0, -0.63], sample * numpy.hamming(len(sample)))
-            a, e, k = talkbox.lpc(lfiltered_data, order=order)
-            roots = [r for r in numpy.roots(a) if numpy.imag(r) >= 0.0]
-            angles = numpy.arctan2(numpy.imag(roots), numpy.real(roots))
-            formants = sorted(angles * (rate / (2 * math.pi)))
-            F1.append(formants[0])
-            F2.append(formants[1])
-        else:
-            F1.append(0.0)
-            F2.append(0.0)
-
-    pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
-    pyplot.plot(midpoints, F1)
-    pyplot.plot(midpoints, F2)
-    pyplot.show()
+    F1 = F(0)
+    F2 = F(1)
 
     logging.info('LLR Computation for F1SD and F2SD')
     W = 11
@@ -81,13 +71,26 @@ def main():
     F2SD += [0.0] * (W / 2 - 1)
 
     # pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
-    # print len(midpoints)
-    # print len(F1SD)
     # pyplot.plot(midpoints, F1SD)
     # pyplot.plot(midpoints, F2SD)
     # pyplot.show()
+    # exit()
 
     logging.info('Decision Combination')
+    threshold_1 = 40.0
+    threshold_2 = threshold_1 * 2.0
+    fp_candidate = [
+        F1SD[t] < threshold_1 and
+        F2SD[t] < threshold_2 and
+        vad[t]
+        for t, _ in enumerate(midpoints)
+    ]
+
+    # pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
+    # for t, v in enumerate(is_filled_pause):
+    #     if v:
+    #         pyplot.axvline(t)
+
     logging.info('Duration Constraint')
     logging.info('Filled Pause Estimates')
 
