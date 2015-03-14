@@ -11,5 +11,8 @@ setup(
     description='',
     install_requires=(
         'scikits.samplerates',
+        'matplotlib',
+        'numpy',
+        'scipy',
     )
 )
