@@ -2,14 +2,28 @@ import logging
 import optparse
 import math
 
-import os.path
 from matplotlib import pyplot, mlab
 import numpy
 import numpy.fft
+import numpy.linalg
 from scipy.io import wavfile
-from scipy import signal
+from scipy import signal, optimize, stats
 from scikits import talkbox
 import librosa.feature
+
+import seg_file
+
+
+def plot_hesitations(hesitations, **kwargs):
+    for hesitation in hesitations:
+        pyplot.axvspan(hesitation[0], hesitation[1], **kwargs)
+
+
+def normed(a, start, end):
+    low = min(a)
+    high = max(a)
+    return (a - low) / (high - low) * (end - start) + start
+
 
 def main():
     parser = optparse.OptionParser()
@@ -35,7 +49,7 @@ def main():
         action='store',
         type='float',
         help='(sec)',
-        default=0.150,
+        default=0.100,
     )
     parser.add_option(
         '--max-gap',
@@ -49,13 +63,17 @@ def main():
 
     input_path = args[0]
     logging.info('Reading %s', input_path)
-
     rate, data = wavfile.read(input_path)
     frame_length = float(options.step) / float(rate)
     logging.info('Sample length: %.2fsec', float(len(data)) / float(rate))
     logging.info('Frame length: %.2fsec', frame_length)
     spectrum, frequencies, midpoints = mlab.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
     spectrum = numpy.transpose(spectrum)
+
+    pyplot.title(input_path)
+
+    logging.info('Loading manual hesitations...')
+    hesitations = seg_file.load_manual_hesitations(input_path, rate)
 
     logging.info('VAD')
     power = numpy.array([
@@ -66,11 +84,12 @@ def main():
     vad = numpy.array([p > limit for p in power])
 
     logging.info('Formant Computation')
+    n_formants = 2
     formants = []
     order = 2 + rate / 1000
     for t, midpoint in enumerate(midpoints):
         if not vad[t]:
-            formants.append([])
+            formants.append([0.0] * n_formants)
             continue
         # Frame index
         fi = t * rate / options.step
@@ -83,15 +102,12 @@ def main():
         a, e, k = talkbox.lpc(lfiltered_sample, order=order)
         roots = filter(lambda v: numpy.imag(v) >= 0, numpy.roots(a))
         angles = numpy.arctan2(numpy.imag(roots), numpy.real(roots)) * rate / (2.0 * math.pi)
-        formants.append(sorted(angles))
-    F = lambda k: [formants[t][k] if len(formants[t]) > k else 0.0 for t, _ in enumerate(midpoints)]
-    # pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
-    # for k in xrange(order):
-    #     pyplot.plot(midpoints, F(k))
-    # pyplot.show()
-    # exit()
-    F1 = F(0)
-    F2 = F(1)
+        angles = sorted(angles)
+        if len(angles) < n_formants:
+            angles += [0.0] * (n_formants - len(angles))
+        formants.append(angles)
+    F1 = [formants[t][0] for t, _ in enumerate(midpoints)]
+    F2 = [formants[t][1] for t, _ in enumerate(midpoints)]
 
     logging.info('LLR Computation for F1SD and F2SD')
     W = 11
@@ -105,40 +121,38 @@ def main():
     F1SD += [0.0] * (W / 2 - 1)
     F2SD += [0.0] * (W / 2 - 1)
 
-    # pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
-    # pyplot.plot(midpoints, F1SD)
-    # pyplot.plot(midpoints, F2SD)
-    # pyplot.show()
-    # exit()
-
-    logging.info('MFCC')
-    N = 10
-    mfcc_sequencies = []
-    for t, midpoint in enumerate(midpoints):
-        if not vad[t]:
-            formants.append([])
-            continue
-        # Frame index
-        fi = t * rate / options.step
-        sample = data[fi - options.nfft / 2:fi + options.nfft / 2 + 1]
-        mfcc_sequencies.append(librosa.feature.mfcc(sample, rate, n_mfcc=13))
-    exit()
 
     logging.info('Decision Combination')
     threshold_1 = 40.0
     threshold_2 = threshold_1 * 2.0
-    frame_candidate = [
+    frame_candidate = numpy.array([
         F1SD[t] < threshold_1 and
-        F2SD[t] < threshold_2 and
-        vad[t]
+        F2SD[t] < threshold_2
         for t, _ in enumerate(midpoints)
-    ]
-    # midpoint_candidates = [midpoints[t] for t, v in enumerate(fp_candidate) if v]
-    # pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
-    # for midpoint_candidate in midpoint_candidates:
-    #     pyplot.axvline(midpoint_candidate, alpha=0.2)
-    # pyplot.show()
-    # exit()
+    ]) * vad
+
+    logging.info('MFCC')
+    mfcc_sequencies = numpy.transpose(librosa.feature.mfcc(data, rate, n_mfcc=20, hop_length=160))[:len(midpoints)]
+    N = 10
+    mu = numpy.roll(
+        numpy.array([
+            numpy.roll(mfcc_sequencies, k)
+            for k in xrange(N)
+        ]).mean(axis=0),
+        shift=-N / 2,
+    )
+
+    assert mu.shape == mfcc_sequencies.shape
+    normes_of_mfss_sequencies = numpy.linalg.norm(mfcc_sequencies, axis=1)
+    assert normes_of_mfss_sequencies.shape == midpoints.shape
+    normes_of_deltas = numpy.linalg.norm(mfcc_sequencies - mu, axis=1)
+    assert normes_of_deltas.shape == midpoints.shape
+
+    cepstral_instability = numpy.roll(
+        numpy.sum((numpy.roll(normes_of_deltas, k, axis=0) for k in xrange(N)), axis=0),
+        shift=-N / 2,
+        axis=0,
+    ) / normes_of_mfss_sequencies
 
     logging.info('Duration Constraint')
     sequences = []
@@ -159,46 +173,14 @@ def main():
     sequences = filter(lambda s: len(s) > 15, sequences)
     filled_pauses = map(lambda sequence: (midpoints[sequence[0]], midpoints[sequence[-1]]), sequences)
 
-    # pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
-    # for sequence in sequences:
-    #     pyplot.axvspan(midpoints[sequence[0]], midpoints[sequence[-1]], alpha=0.5)
-    # pyplot.show()
-    # exit()
-
-    logging.info('Filled Pause Estimates')
-    fname, fext = os.path.splitext(input_path)
-    with open(fname + '.seg') as f:
-        for line in f:
-            if line.strip() == '[LABELS]':
-                break
-        hesitation_start = None
-        hesitations = []
-        for line in f:
-            position, level, label = line.split(',', 2)
-            position = int(position) / 2
-            if label == 'End File':
-                break
-            elif 'h.e' in label:
-                hesitation_start = position
-            elif hesitation_start is not None:
-                hesitations.append((hesitation_start, position))
-                hesitation_start = None
+    logging.info('Writing data...')
+    seg_file.save_hesitations(input_path, 'india09', filled_pauses)
 
     pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
-    for hesitation in hesitations:
-        pyplot.axvspan(hesitation[0] / float(rate), hesitation[1] / float(rate), alpha=0.5)
-    for k in xrange(2):
-        pyplot.plot(midpoints, F(k))
     pyplot.plot(midpoints, F1SD)
-    pyplot.plot(midpoints, F2SD)
+    plot_hesitations(filled_pauses, alpha=0.5, color='b')
+    # plot_hesitations(hesitations, alpha=0.5, color='r')
     pyplot.show()
-    exit()
-
-
-    # pyplot.axvline(x=6.0)
-    # pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
-    # pyplot.plot(midpoints, vad / max(vad) * 8000.0)
-    # pyplot.show()
 
 
 if __name__ == '__main__':
