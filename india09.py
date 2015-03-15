@@ -25,6 +25,27 @@ def normed(a, start, end):
     return (a - low) / (high - low) * (end - start) + start
 
 
+def extract_sequencies(frame_candidate, midpoints, options):
+    sequences = []
+    last_sequence = []
+    for t, v in enumerate(frame_candidate):
+        if not v:
+            continue
+        if last_sequence:
+            previous_t = last_sequence[-1]
+            if midpoints[t] - midpoints[previous_t] > options.maximum_gap:
+                sequences.append(last_sequence)
+                last_sequence = [t]
+            else:
+                last_sequence.append(t)
+        else:
+            last_sequence.append(t)
+    sequences.append(last_sequence)
+    sequences = filter(lambda s: len(s) > 15, sequences)
+    filled_pauses = map(lambda sequence: (midpoints[sequence[0]], midpoints[sequence[-1]]), sequences)
+    return filled_pauses
+
+
 def main():
     parser = optparse.OptionParser()
     parser.add_option(
@@ -122,15 +143,6 @@ def main():
     F2SD += [0.0] * (W / 2 - 1)
 
 
-    logging.info('Decision Combination')
-    threshold_1 = 40.0
-    threshold_2 = threshold_1 * 2.0
-    frame_candidate = numpy.array([
-        F1SD[t] < threshold_1 and
-        F2SD[t] < threshold_2
-        for t, _ in enumerate(midpoints)
-    ]) * vad
-
     logging.info('MFCC')
     mfcc_sequencies = numpy.transpose(librosa.feature.mfcc(data, rate, n_mfcc=20, hop_length=160))[:len(midpoints)]
     N = 10
@@ -153,33 +165,40 @@ def main():
         shift=-N / 2,
         axis=0,
     ) / normes_of_mfss_sequencies
+    W = 11
+    CISD = [0.0] * (W / 2)
+    for t, midpoint in enumerate(midpoints):
+        if t < W / 2: continue
+        if t > len(midpoints) - W / 2: continue
+        CISD.append(numpy.std(cepstral_instability[t - W/2:t + W/2 + 1]))
+    CISD += [0.0] * (W / 2 - 1)
+    CISD = numpy.array(CISD)
 
     logging.info('Duration Constraint')
-    sequences = []
-    last_sequence = []
-    for t, v in enumerate(frame_candidate):
-        if not v:
-            continue
-        if last_sequence:
-            previous_t = last_sequence[-1]
-            if midpoints[t] - midpoints[previous_t] > options.maximum_gap:
-                sequences.append(last_sequence)
-                last_sequence = [t]
-            else:
-                last_sequence.append(t)
-        else:
-            last_sequence.append(t)
-    sequences.append(last_sequence)
-    sequences = filter(lambda s: len(s) > 15, sequences)
-    filled_pauses = map(lambda sequence: (midpoints[sequence[0]], midpoints[sequence[-1]]), sequences)
+    logging.info('Decision Combination')
+    fsd_filled_pauses = extract_sequencies(
+        numpy.array([
+            F1SD[t] < 40.0 and
+            F2SD[t] < 80.0
+            for t, _ in enumerate(midpoints)
+        ]) * vad,
+        midpoints=midpoints,
+        options=options)
+    mfcc_filled_pauses = extract_sequencies(
+        numpy.array([
+            v < 0.05
+            for v in CISD
+        ]) * vad,
+        midpoints=midpoints,
+        options=options)
 
     logging.info('Writing data...')
-    seg_file.save_hesitations(input_path, 'india09', filled_pauses)
+    # seg_file.save_hesitations(input_path, 'india09', filled_pauses)
 
     pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
-    pyplot.plot(midpoints, F1SD)
-    plot_hesitations(filled_pauses, alpha=0.5, color='b')
-    # plot_hesitations(hesitations, alpha=0.5, color='r')
+    plot_hesitations(fsd_filled_pauses, alpha=0.5, color='#A4A4A4')
+    plot_hesitations(mfcc_filled_pauses, alpha=0.5, color='#2E9AFE')
+    plot_hesitations(hesitations, alpha=0.5, color='#DF01D7')
     pyplot.show()
 
 
