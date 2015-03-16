@@ -97,6 +97,7 @@ def main():
     hesitations = seg_file.load_manual_hesitations(input_path, rate)
 
     logging.info('VAD')
+    # TODO
     power = numpy.array([
         sum(numpy.abs(spectrum[t]))
         for t, midpoint in enumerate(midpoints)
@@ -105,20 +106,20 @@ def main():
     vad = numpy.array([p > limit for p in power])
 
     logging.info('Formant Computation')
-    n_formants = 2
+    n_formants = 4
     formants = []
     order = 2 + rate / 1000
     for t, midpoint in enumerate(midpoints):
-        if not vad[t]:
-            formants.append([0.0] * n_formants)
-            continue
+        # if not vad[t]:
+        #     formants.append([0.0] * n_formants)
+        #     continue
         # Frame index
         fi = t * rate / options.step
         sample = data[fi - options.nfft / 2:fi + options.nfft / 2 + 1]
         x1 = sample * numpy.hamming(len(sample))
         lfiltered_sample = signal.lfilter([1.0], [1.0, 0.63], x1)
         if len(lfiltered_sample) < order:
-            formants.append([])
+            formants.append([0.0] * n_formants)
             continue
         a, e, k = talkbox.lpc(lfiltered_sample, order=order)
         roots = filter(lambda v: numpy.imag(v) >= 0, numpy.roots(a))
@@ -127,8 +128,10 @@ def main():
         if len(angles) < n_formants:
             angles += [0.0] * (n_formants - len(angles))
         formants.append(angles)
-    F1 = [formants[t][0] for t, _ in enumerate(midpoints)]
-    F2 = [formants[t][1] for t, _ in enumerate(midpoints)]
+    F0 = [formants[t][0] for t, _ in enumerate(midpoints)]
+    F1 = [formants[t][1] for t, _ in enumerate(midpoints)]
+    F2 = [formants[t][2] for t, _ in enumerate(midpoints)]
+    F3 = [formants[t][3] for t, _ in enumerate(midpoints)]
 
     logging.info('LLR Computation for F1SD and F2SD')
     W = 11
@@ -196,6 +199,10 @@ def main():
     # seg_file.save_hesitations(input_path, 'india09', filled_pauses)
 
     pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
+    pyplot.plot(midpoints, F0)
+    pyplot.plot(midpoints, F1)
+    pyplot.plot(midpoints, F2)
+    pyplot.plot(midpoints, F3)
     plot_hesitations(fsd_filled_pauses, alpha=0.5, color='#A4A4A4')
     plot_hesitations(mfcc_filled_pauses, alpha=0.5, color='#2E9AFE')
     plot_hesitations(hesitations, alpha=0.5, color='#DF01D7')
