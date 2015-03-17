@@ -10,6 +10,7 @@ from scipy.io import wavfile
 from scipy import signal, optimize, stats
 from scikits import talkbox
 import librosa.feature
+import os.path
 
 import seg_file
 
@@ -80,6 +81,22 @@ def main():
         help='(sec)',
         default=0.02,
     )
+    parser.add_option(
+        '--tau1',
+        dest='tau1',
+        action='store',
+        type='float',
+        help='(Hz)',
+        default=40.0,
+    )
+    parser.add_option(
+        '--tau2',
+        dest='tau2',
+        action='store',
+        type='float',
+        help='(Hz)',
+        default=80.0,
+    )
     options, args = parser.parse_args()
 
     input_path = args[0]
@@ -110,9 +127,6 @@ def main():
     formants = []
     order = 2 + rate / 1000
     for t, midpoint in enumerate(midpoints):
-        # if not vad[t]:
-        #     formants.append([0.0] * n_formants)
-        #     continue
         # Frame index
         fi = t * rate / options.step
         sample = data[fi - options.nfft / 2:fi + options.nfft / 2 + 1]
@@ -124,14 +138,12 @@ def main():
         a, e, k = talkbox.lpc(lfiltered_sample, order=order)
         roots = filter(lambda v: numpy.imag(v) >= 0, numpy.roots(a))
         angles = numpy.arctan2(numpy.imag(roots), numpy.real(roots)) * rate / (2.0 * math.pi)
-        angles = sorted(angles)
+        angles = filter(None, sorted(angles))
         if len(angles) < n_formants:
             angles += [0.0] * (n_formants - len(angles))
         formants.append(angles)
-    F0 = [formants[t][0] for t, _ in enumerate(midpoints)]
-    F1 = [formants[t][1] for t, _ in enumerate(midpoints)]
-    F2 = [formants[t][2] for t, _ in enumerate(midpoints)]
-    F3 = [formants[t][3] for t, _ in enumerate(midpoints)]
+    F1 = [formants[t][0] for t, _ in enumerate(midpoints)]
+    F2 = [formants[t][1] for t, _ in enumerate(midpoints)]
 
     logging.info('LLR Computation for F1SD and F2SD')
     W = 11
@@ -181,8 +193,8 @@ def main():
     logging.info('Decision Combination')
     fsd_filled_pauses = extract_sequencies(
         numpy.array([
-            F1SD[t] < 40.0 and
-            F2SD[t] < 80.0
+            F1SD[t] < options.tau1 and
+            F2SD[t] < options.tau2
             for t, _ in enumerate(midpoints)
         ]) * vad,
         midpoints=midpoints,
@@ -195,18 +207,27 @@ def main():
         midpoints=midpoints,
         options=options)
 
+    # pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
+    # pyplot.plot(midpoints, F1 * vad)
+    # pyplot.plot(midpoints, F2 * vad)
+    # plot_hesitations(fsd_filled_pauses, alpha=0.5, color='#A4A4A4')
+    # plot_hesitations(mfcc_filled_pauses, alpha=0.5, color='#2E9AFE')
+    # plot_hesitations(hesitations, alpha=0.8, color='#DF01D7')
+    # pyplot.show()
+
     logging.info('Writing data...')
     # seg_file.save_hesitations(input_path, 'india09', filled_pauses)
+    def write_pauses(f, name, data):
+        f.write(name + '\n')
+        f.write('%d\n' % len(data))
+        for start, end in data:
+            f.write('%.02f %.02f\n' % (start, end))
 
-    pyplot.specgram(data, NFFT=options.nfft, Fs=rate, noverlap=options.nfft - options.step)
-    pyplot.plot(midpoints, F0)
-    pyplot.plot(midpoints, F1)
-    pyplot.plot(midpoints, F2)
-    pyplot.plot(midpoints, F3)
-    plot_hesitations(fsd_filled_pauses, alpha=0.5, color='#A4A4A4')
-    plot_hesitations(mfcc_filled_pauses, alpha=0.5, color='#2E9AFE')
-    plot_hesitations(hesitations, alpha=0.5, color='#DF01D7')
-    pyplot.show()
+    fname, fext = os.path.splitext(input_path)
+    with open(fname + '.txt', 'w') as f:
+        write_pauses(f, 'Manual', hesitations)
+        write_pauses(f, 'FSD', fsd_filled_pauses)
+        write_pauses(f, 'MFCCSD', mfcc_filled_pauses)
 
 
 if __name__ == '__main__':
