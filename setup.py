@@ -10,9 +10,13 @@ setup(
     author_email='vladimir.berkutov@gmail.com',
     description='',
     install_requires=(
-        'scikits.samplerates',
         'matplotlib',
         'numpy',
         'scipy',
-    )
+    ),
+    entry_points=dict(
+      console_scripts=[
+        'wavsaw = wavsaw:main'
+      ],
+    ),
 )
