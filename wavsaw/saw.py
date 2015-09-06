@@ -3,7 +3,7 @@ import optparse
 import os.path
 import librosa
 import numpy as np
-
+from . import common
 
 def build_parser():
   parser = optparse.OptionParser(
