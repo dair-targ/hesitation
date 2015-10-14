@@ -16,8 +16,7 @@ setup(
     ),
     entry_points=dict(
       console_scripts=[
-        'wavsaw-saw = wavsaw.saw:main',
-        'wavsaw-view = wavsaw.view:main',
+        'wavsaw-split = wavsaw.split:main',
       ],
     ),
 )

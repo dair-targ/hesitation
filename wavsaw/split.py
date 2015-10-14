@@ -1,8 +1,6 @@
 #!/usr/bin/python2.7
 """
-wavsaw-split --chunk=10s input.wav output
-Creates an ${output} directory and produces chunks of wav format
-with the specific length.
+Splits the input .wav file into an even chunks and writes them to the output directory.
 """
 
 import os
@@ -15,18 +13,21 @@ Second = unit('s')
 Frame = unit('f')
 
 def _create_parser():
-  parser = argparse.ArgumentParser()
+  unit_description = '\nAvailable units: frames (f), seconds (s), samples ().\nDefault %(default)s.'
+  parser = argparse.ArgumentParser(
+    description=__doc__
+  )
   parser.add_argument(
     '--chunk',
     dest='chunk',
-    default='1000f',
-    help='Chunk length. Available units: frames (f).'
+    default='10s',
+    help='Chunk length.' + unit_description,
   )
   parser.add_argument(
     '--hop',
     dest='hop',
     default='100',
-    help='Hop length (samples)',
+    help='Hop length.' + unit_description,
   )
   parser.add_argument(
     'input',
@@ -39,6 +40,16 @@ def _create_parser():
     help='Output directory (by default is equals to name of input file)',
   )
   return parser
+
+
+def parse_value(value, s2samples, f2samples):
+  if value.endswith('s'):
+    value = s2samples(Second(float(value[:-1])))
+  elif value.endswith('f'):
+    value = f2samples(Frame(float(value[:-1])))
+  else:
+    value = Sample(int(float(value)))
+  return value
 
 
 def main():
@@ -54,32 +65,39 @@ def main():
   total_duration_samples = Sample(float(len(data)))
   sr = Sample(sr) / Second(1.0)
   
-  output_path = os.path.abspath(args.output)
-  
   print 'Sample rate:', sr
   print 'Total duration: %s' % (total_duration_samples / sr)
   
   frame_size = Sample(1 + n_fft / 2) / Frame(1)
   print 'Frame size: %s' % frame_size
-  hop_length = Sample(int(args.hop))
+  
+  hop_length = parse_value(
+    args.hop,
+    s2samples=lambda s: s * sr,
+    f2samples=lambda f: f * frame_size,
+  )
   print 'Hop length: %s' % hop_length
   
-  chunk_size = args.chunk
-  if chunk_size.endswith('f'):
-    chunk_size_frames = Frame(int(chunk_size[:-1]))
-  elif chunk_size.endswith('s'):
-    chunk_size_seconds = Second(int(chunk_size[:-1]))
-    chunk_size_frames = Frame(int((chunk_size_seconds * sr - frame_size * Frame(1)) / hop_length) + 1)
-  chunk_size_samples = frame_size * Frame(1) + (chunk_size_frames - Frame(1)) / Frame(1) * hop_length
-  print 'Chunk size: %d frames' % chunk_size_frames
-  print 'Chunk size: %d samples' % chunk_size_samples
+  chunk_s2f = lambda s: Frame(int((s * sr - frame_size * Frame(1)) / hop_length) + 1)
+  chunk_f2samples = lambda f: frame_size * Frame(1) + (f - Frame(1)) / Frame(1) * hop_length
+  chunk_size_samples = parse_value(
+    args.chunk,
+    s2samples=lambda s: chunk_f2samples(chunk_s2f(s)),
+    f2samples=chunk_f2samples,
+  )
   
-  for chunk_index, start_sample in enumerate(xrange(0, len(data), (chunk_size_samples - frame_size * Frame(1) + hop_length) / Sample(1))):
+  output_path = os.path.abspath(args.output or os.path.splitext(input_path)[0])
+  print 'Writing to %s/' % output_path
+  if not os.path.exists(output_path):
+    os.mkdir(output_path)
+  
+  for chunk_index, start_sample in enumerate(xrange(0, len(data), int(chunk_size_samples - frame_size * Frame(1) + hop_length) / Sample(1))):
     start_sample = Sample(start_sample)
     chunk_data = data[start_sample / Sample(1):(start_sample + chunk_size_samples) / Sample(1)]
     output_filename = os.path.join(output_path, '%d.wav' % chunk_index)
-    print 'Writing chunk #%d[%d..%d] to %s' % (chunk_index, start_sample, start_sample + Sample(len(chunk_data)), output_path)
-    #librosa.output.write_wav('', chunk_data, sr)
+    action = 'Replacing' if os.path.exists(output_filename) else 'Writing'
+    print '%s chunk #%d[%d..%d] to %s' % (action, chunk_index, start_sample, start_sample + Sample(len(chunk_data)), output_filename)
+    librosa.output.write_wav(output_filename, chunk_data, sr)
 
 
 if __name__ == '__main__':
