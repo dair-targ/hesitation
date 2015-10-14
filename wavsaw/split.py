@@ -56,7 +56,6 @@ def main():
   parser = _create_parser()
   args = parser.parse_args()
   n_fft = 2048
-  hop_length = int
   
   input_path = os.path.abspath(args.input)
   print 'Reading from', input_path, '...'

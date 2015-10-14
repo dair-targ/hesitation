@@ -17,6 +17,7 @@ setup(
     entry_points=dict(
       console_scripts=[
         'wavsaw-split = wavsaw.split:main',
+        'wavsaw-stft = wavsaw.stft:main',
       ],
     ),
 )
